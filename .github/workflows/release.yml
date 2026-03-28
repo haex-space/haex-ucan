@@ -1,0 +1,181 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Get pnpm store directory
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run typecheck
+        run: pnpm typecheck
+
+      - name: Run tests
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Get pnpm store directory
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Get version
+        run: echo "PACKAGE_VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_ENV
+
+      - name: Generate release notes
+        run: |
+          CURRENT_TAG="v${PACKAGE_VERSION}"
+          PREVIOUS_TAG=$(git tag -l 'v*' --sort=-v:refname | grep -A1 "^${CURRENT_TAG}$" | tail -1)
+
+          if [ "$PREVIOUS_TAG" = "$CURRENT_TAG" ] || [ -z "$PREVIOUS_TAG" ]; then
+            PREVIOUS_TAG=$(git describe --tags --abbrev=0 "${CURRENT_TAG}^" 2>/dev/null || echo "")
+          fi
+
+          if [ -z "$PREVIOUS_TAG" ] || [ "$PREVIOUS_TAG" = "$CURRENT_TAG" ]; then
+            COMMITS=$(git log --pretty=format:"%s" --no-merges)
+          else
+            COMMITS=$(git log "${PREVIOUS_TAG}..${CURRENT_TAG}" --pretty=format:"%s" --no-merges)
+          fi
+
+          FEATURES=""
+          FIXES=""
+
+          while IFS= read -r subject; do
+            if [[ "$subject" == "Bump version to"* ]]; then
+              continue
+            fi
+            if [[ "$subject" == feat:* ]] || [[ "$subject" == feat\(*\):* ]]; then
+              CLEAN=$(echo "$subject" | sed 's/^feat[^:]*: //')
+              FEATURES="${FEATURES}- ${CLEAN}"$'\n'
+            elif [[ "$subject" == fix:* ]] || [[ "$subject" == fix\(*\):* ]]; then
+              CLEAN=$(echo "$subject" | sed 's/^fix[^:]*: //')
+              FIXES="${FIXES}- ${CLEAN}"$'\n'
+            fi
+          done <<< "$COMMITS"
+
+          NOTES=""
+          if [ -n "$FEATURES" ]; then
+            NOTES="${NOTES}## Features"$'\n\n'"${FEATURES}"$'\n'
+          fi
+          if [ -n "$FIXES" ]; then
+            NOTES="${NOTES}## Bug Fixes"$'\n\n'"${FIXES}"$'\n'
+          fi
+          if [ -z "$NOTES" ]; then
+            NOTES="Release v${PACKAGE_VERSION}"
+          fi
+
+          echo "$NOTES" > release_notes.md
+
+      - name: Create GitHub Release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const releaseNotes = fs.readFileSync('release_notes.md', 'utf8');
+            const tagName = `v${process.env.PACKAGE_VERSION}`;
+
+            let existingRelease = null;
+            try {
+              const { data: releases } = await github.rest.repos.listReleases({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 10
+              });
+              existingRelease = releases.find(r => r.tag_name === tagName);
+            } catch (e) {
+              console.log('No existing releases found');
+            }
+
+            if (existingRelease) {
+              await github.rest.repos.deleteRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: existingRelease.id
+              });
+            }
+
+            await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tagName,
+              name: `@haex-space/ucan v${process.env.PACKAGE_VERSION}`,
+              body: releaseNotes,
+              draft: false,
+              prerelease: false
+            });
+
+      - name: Publish to npm
+        run: pnpm publish --access public --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

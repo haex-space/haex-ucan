@@ -1,0 +1,45 @@
+{
+  "name": "@haex-space/ucan",
+  "version": "0.1.0",
+  "description": "UCAN-based capability tokens for haex space authorization",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/haex-space/haex-ucan.git"
+  },
+  "keywords": [
+    "ucan",
+    "authorization",
+    "capabilities",
+    "ed25519",
+    "did",
+    "haex"
+  ],
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "release:patch": "node scripts/release.js patch",
+    "release:minor": "node scripts/release.js minor",
+    "release:major": "node scripts/release.js major"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.0.0"
+  }
+}
