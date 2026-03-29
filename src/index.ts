@@ -9,6 +9,7 @@ export type {
   EncodedUcan,
   DecodedUcan,
   VerifiedUcan,
+  UcanContext,
   SignFn,
   VerifyFn,
   CreateUcanParams,

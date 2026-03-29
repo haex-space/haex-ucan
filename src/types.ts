@@ -94,6 +94,21 @@ export interface VerifiedUcan {
 }
 
 /**
+ * Authenticated UCAN context — set by middleware after successful verification.
+ * Generic enough for any server/client using UCAN auth.
+ */
+export interface UcanContext {
+  /** Issuer DID from the verified UCAN */
+  issuerDid: string
+  /** Public key identifier (typically same as issuer DID) */
+  publicKey: string
+  /** Capabilities granted by the UCAN */
+  capabilities: Capabilities
+  /** The full verified UCAN for further inspection */
+  verifiedUcan: VerifiedUcan
+}
+
+/**
  * Signing function interface — abstracts over WebCrypto, Tauri commands, etc.
  * Takes raw bytes, returns Ed25519 signature bytes.
  */
