@@ -26,6 +26,41 @@ export type ServerCapability = 'server/relay'
 export type Capability = SpaceCapability | ServerCapability
 
 /**
+ * DID-Auth action identifiers.
+ * Used in DID-Auth signed requests to specify what operation is being authorized.
+ * These are NOT UCAN capabilities — they identify the intent of a signed request
+ * where no UCAN is required (e.g., space creation, vault key operations).
+ */
+export enum DidAuthAction {
+  // Sync operations
+  SyncPush = 'sync-push',
+  SyncPull = 'sync-pull',
+  SyncPullColumns = 'sync-pull-columns',
+
+  // Vault key operations
+  VaultKeyUpload = 'vault-key-upload',
+  VaultKeyGet = 'vault-key-get',
+  VaultKeyUpdate = 'vault-key-update',
+  VaultDelete = 'vault-delete',
+  VaultDeleteAll = 'vault-delete-all',
+  VaultList = 'vault-list',
+
+  // Space operations
+  CreateSpace = 'create-space',
+  ListSpaces = 'list-spaces',
+  AcceptInvite = 'accept-invite',
+  DeclineInvite = 'decline-invite',
+  SelfLeave = 'self-leave',
+
+  // Identity operations
+  UpdateRecovery = 'update-recovery',
+  StorageCredentials = 'storage-credentials',
+
+  // WebSocket
+  WsConnect = 'ws-connect',
+}
+
+/**
  * Capabilities map: resource identifier → capability level
  *
  * Resource identifiers:

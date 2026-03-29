@@ -10,6 +10,7 @@ export type {
   DecodedUcan,
   VerifiedUcan,
   UcanContext,
+  DidAuthAction,
   SignFn,
   VerifyFn,
   CreateUcanParams,
