@@ -31,3 +31,11 @@ export {
 } from './capabilities'
 export { createWebCryptoSigner, createWebCryptoVerifier } from './crypto'
 export { base64urlEncode, base64urlDecode } from './encoding'
+export {
+  base58btcEncode,
+  base58btcDecode,
+  multibaseEncode,
+  multibaseDecode,
+  publicKeyToDid,
+  didToRawPublicKey,
+} from './multibase'

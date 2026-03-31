@@ -8,6 +8,7 @@ import type {
 } from './types'
 import { decodeUcan, getSigningInput } from './token'
 import { capabilitiesSatisfy, parseSpaceResource } from './capabilities'
+import { base58btcDecode } from './multibase'
 
 /** Maximum delegation chain depth to prevent abuse */
 const MAX_PROOF_DEPTH = 10
@@ -204,36 +205,3 @@ export function findRootIssuer(verified: VerifiedUcan): string {
   return findRootIssuer(verified.proofs[0]!)
 }
 
-// ── Base58-btc decode (minimal, for did:key parsing) ─────────────────
-
-const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
-
-function base58btcDecode(str: string): Uint8Array {
-  let zeros = 0
-  for (const c of str) {
-    if (c !== '1') break
-    zeros++
-  }
-
-  const bytes: number[] = []
-  for (const c of str) {
-    const value = BASE58_ALPHABET.indexOf(c)
-    if (value === -1) throw new Error(`Invalid base58 character: ${c}`)
-    let carry = value
-    for (let j = 0; j < bytes.length; j++) {
-      carry += bytes[j]! * 58
-      bytes[j] = carry & 0xff
-      carry >>= 8
-    }
-    while (carry > 0) {
-      bytes.push(carry & 0xff)
-      carry >>= 8
-    }
-  }
-
-  const result = new Uint8Array(zeros + bytes.length)
-  for (let i = 0; i < bytes.length; i++) {
-    result[zeros + i] = bytes[bytes.length - 1 - i]!
-  }
-  return result
-}
