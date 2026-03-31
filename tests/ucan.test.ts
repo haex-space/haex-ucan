@@ -384,6 +384,110 @@ describe('server delegation', () => {
     expect(verified.payload.aud).toBe(serverDid)
     expect(verified.payload.cap[resource]).toBe('server/relay')
   })
+
+  it('reader can delegate server/relay (read-only relay)', async () => {
+    const admin = await generateTestIdentity()
+    const reader = await generateTestIdentity()
+    const serverDid = 'did:web:relay.example.com'
+    const resource = spaceResource(SPACE_ID)
+
+    // Admin gives reader space/read only
+    const readerUcan = await createUcan({
+      issuer: admin.did,
+      audience: reader.did,
+      capabilities: { [resource]: 'space/read' },
+      expiration: futureExp(),
+    }, admin.sign)
+
+    // Reader delegates server/relay to their relay server
+    const relayUcan = await createUcan({
+      issuer: reader.did,
+      audience: serverDid,
+      capabilities: { [resource]: 'server/relay' },
+      proofs: [readerUcan],
+      expiration: futureExp(),
+    }, reader.sign)
+
+    // Should succeed — readers can delegate relay access
+    const verified = await verifyUcan(relayUcan, verify)
+    expect(verified.payload.cap[resource]).toBe('server/relay')
+  })
+
+  it('self-signed server/relay without delegation chain is rejected', async () => {
+    const attacker = await generateTestIdentity()
+    const serverDid = 'did:web:evil.example.com'
+    const resource = spaceResource(SPACE_ID)
+
+    // Attacker creates a root UCAN (no proofs) — NOT delegated from a real admin
+    const selfSignedRoot = await createUcan({
+      issuer: attacker.did,
+      audience: attacker.did,
+      capabilities: { [resource]: 'space/admin' },
+      expiration: futureExp(),
+    }, attacker.sign)
+
+    // Attacker tries to delegate server/relay based on their self-signed root
+    const relayUcan = await createUcan({
+      issuer: attacker.did,
+      audience: serverDid,
+      capabilities: { [resource]: 'server/relay' },
+      proofs: [selfSignedRoot],
+      expiration: futureExp(),
+    }, attacker.sign)
+
+    // verifyUcan succeeds (cryptographically valid) — but the root is self-signed.
+    // The SERVER must check root issuer membership (not the library's job).
+    // The library validates: signature ✅, chain link (aud→iss) ✅, capability attenuation ✅
+    const verified = await verifyUcan(relayUcan, verify)
+    expect(verified.payload.cap[resource]).toBe('server/relay')
+
+    // The root issuer is the attacker themselves — server must reject this
+    expect(findRootIssuer(verified)).toBe(attacker.did)
+  })
+
+  it('server/relay on non-space resource is rejected', async () => {
+    const admin = await generateTestIdentity()
+    const serverDid = 'did:web:sync.example.com'
+
+    // Admin gives themselves space/admin
+    const rootUcan = await createUcan({
+      issuer: admin.did,
+      audience: admin.did,
+      capabilities: { [spaceResource(SPACE_ID)]: 'space/admin' },
+      expiration: futureExp(),
+    }, admin.sign)
+
+    // Try to delegate server/relay scoped to server:<did> instead of space:<id>
+    const relayUcan = await createUcan({
+      issuer: admin.did,
+      audience: serverDid,
+      capabilities: { [serverResource(serverDid)]: 'server/relay' },
+      proofs: [rootUcan],
+      expiration: futureExp(),
+    }, admin.sign)
+
+    // Should fail — server/relay requires space:* resource for delegation chain
+    await expect(verifyUcan(relayUcan, verify)).rejects.toThrow('not authorized')
+  })
+
+  it('server/relay cannot be delegated without any space capability', async () => {
+    const user = await generateTestIdentity()
+    const serverDid = 'did:web:sync.example.com'
+
+    // User has NO capabilities — tries to delegate server/relay
+    const relayUcan = await createUcan({
+      issuer: user.did,
+      audience: serverDid,
+      capabilities: { [spaceResource(SPACE_ID)]: 'server/relay' },
+      expiration: futureExp(),
+      // No proofs at all — root UCAN
+    }, user.sign)
+
+    // This is a root UCAN (no proofs), so verifyUcan won't check delegation chain.
+    // The SERVER must check root issuer membership.
+    const verified = await verifyUcan(relayUcan, verify)
+    expect(findRootIssuer(verified)).toBe(user.did)
+  })
 })
 
 // ── Base58-btc encode (for test identity generation) ─────────────────
