@@ -371,18 +371,18 @@ describe('server delegation', () => {
       expiration: futureExp(),
     }, admin.sign)
 
-    // User delegates server/relay to their server
+    // User delegates server/relay to their server (scoped to space)
     const serverUcan = await createUcan({
       issuer: user.did,
       audience: serverDid,
-      capabilities: { [serverResource(serverDid)]: 'server/relay' },
+      capabilities: { [resource]: 'server/relay' },
       proofs: [userUcan],
       expiration: futureExp(),
     }, user.sign)
 
     const verified = await verifyUcan(serverUcan, verify)
     expect(verified.payload.aud).toBe(serverDid)
-    expect(verified.payload.cap[serverResource(serverDid)]).toBe('server/relay')
+    expect(verified.payload.cap[resource]).toBe('server/relay')
   })
 })
 

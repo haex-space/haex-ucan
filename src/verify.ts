@@ -104,14 +104,17 @@ function verifyDelegationChain(
       if (proof.payload.aud !== issuer) continue
 
       if (requiredCapability === 'server/relay') {
-        // server/relay is a meta-capability: the user can delegate it
-        // as long as they hold any space capability (proves membership).
-        const hasAnySpaceCap = Object.values(proof.payload.cap).some(
-          cap => cap.startsWith('space/'),
-        )
-        if (hasAnySpaceCap) {
-          authorized = true
-          break
+        // server/relay can be delegated by anyone who holds any space capability
+        // on the target space. The relay inherits the delegator's permission level —
+        // it cannot do more than the delegating user could do directly.
+        const spaceId = parseSpaceResource(resource)
+        if (spaceId) {
+          const spaceRes = `space:${spaceId}`
+          const proofCap = proof.payload.cap[spaceRes]
+          if (proofCap && proofCap.startsWith('space/')) {
+            authorized = true
+            break
+          }
         }
       } else {
         // Attenuation: proof must grant sufficient capability for this resource
