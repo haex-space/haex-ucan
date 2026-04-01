@@ -1,6 +1,6 @@
 {
   "name": "@haex-space/ucan",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "packageManager": "pnpm@10.15.1",
   "description": "UCAN-based capability tokens for haex space authorization",
   "repository": {
