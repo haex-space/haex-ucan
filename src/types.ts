@@ -17,11 +17,22 @@ export interface UcanHeader {
  */
 export type SpaceCapability = 'space/admin' | 'space/invite' | 'space/write' | 'space/read'
 
+export const SpaceCapabilities = {
+  ADMIN: 'space/admin',
+  INVITE: 'space/invite',
+  WRITE: 'space/write',
+  READ: 'space/read',
+} as const satisfies Record<string, SpaceCapability>
+
 /**
  * Server delegation capability — allows a server to relay MLS messages
  * on behalf of a user.
  */
 export type ServerCapability = 'server/relay'
+
+export const ServerCapabilities = {
+  RELAY: 'server/relay',
+} as const satisfies Record<string, ServerCapability>
 
 export type Capability = SpaceCapability | ServerCapability
 

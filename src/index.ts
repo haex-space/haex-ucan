@@ -17,7 +17,7 @@ export type {
   ValidationResult,
 } from './types'
 
-export { DidAuthAction } from './types'
+export { DidAuthAction, SpaceCapabilities, ServerCapabilities } from './types'
 
 export { createUcan, decodeUcan, getSigningInput } from './token'
 export { verifyUcan, validateUcan, findRootIssuer, didToPublicKey } from './verify'
