@@ -1,11 +1,9 @@
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import {
   createUcan,
   decodeUcan,
   verifyUcan,
   validateUcan,
-  satisfies,
-  canDelegate,
   spaceResource,
   serverResource,
   createWebCryptoSigner,
@@ -13,6 +11,7 @@ import {
   findRootIssuer,
 } from '../src'
 import type { EncodedUcan, SignFn } from '../src'
+import { spaceCapabilitySet } from '../src/capabilities'
 
 // ── Test helpers ─────────────────────────────────────────────────────
 
@@ -52,49 +51,17 @@ const SPACE_ID = 'test-space-123'
 const ONE_HOUR = 3600
 const futureExp = () => Math.floor(Date.now() / 1000) + ONE_HOUR
 
-// ── Capability tests ─────────────────────────────────────────────────
-
-describe('capabilities', () => {
-  it('admin satisfies all space capabilities', () => {
-    expect(satisfies('space/admin', 'space/admin')).toBe(true)
-    expect(satisfies('space/admin', 'space/invite')).toBe(true)
-    expect(satisfies('space/admin', 'space/write')).toBe(true)
-    expect(satisfies('space/admin', 'space/read')).toBe(true)
-  })
-
-  it('write does not satisfy admin or invite', () => {
-    expect(satisfies('space/write', 'space/admin')).toBe(false)
-    expect(satisfies('space/write', 'space/invite')).toBe(false)
-  })
-
-  it('read only satisfies read', () => {
-    expect(satisfies('space/read', 'space/read')).toBe(true)
-    expect(satisfies('space/read', 'space/write')).toBe(false)
-  })
-
-  it('server/relay only satisfies itself', () => {
-    expect(satisfies('server/relay', 'server/relay')).toBe(true)
-    expect(satisfies('server/relay', 'space/read')).toBe(false)
-    expect(satisfies('space/admin', 'server/relay')).toBe(false)
-  })
-
-  it('canDelegate follows same rules as satisfies', () => {
-    expect(canDelegate('space/admin', 'space/write')).toBe(true)
-    expect(canDelegate('space/write', 'space/admin')).toBe(false)
-    expect(canDelegate('space/read', 'space/read')).toBe(true)
-  })
-})
-
 // ── Token encoding/decoding ──────────────────────────────────────────
 
 describe('token encoding', () => {
   it('should create and decode a root UCAN', async () => {
     const admin = await generateTestIdentity()
+    const adminSet = spaceCapabilitySet().admin(false).build()
 
     const token = await createUcan({
       issuer: admin.did,
       audience: admin.did,
-      capabilities: { [spaceResource(SPACE_ID)]: 'space/admin' },
+      capabilities: { [spaceResource(SPACE_ID)]: adminSet },
       expiration: futureExp(),
     }, admin.sign)
 
@@ -105,7 +72,7 @@ describe('token encoding', () => {
     expect(decoded.payload.ucv).toBe('1.0')
     expect(decoded.payload.iss).toBe(admin.did)
     expect(decoded.payload.aud).toBe(admin.did)
-    expect(decoded.payload.cap[spaceResource(SPACE_ID)]).toBe('space/admin')
+    expect(decoded.payload.cap[spaceResource(SPACE_ID)]).toEqual(adminSet)
     expect(decoded.payload.prf).toEqual([])
     expect(decoded.payload.nnc).toBeTruthy()
   })
@@ -125,7 +92,7 @@ describe('signature verification', () => {
     const token = await createUcan({
       issuer: admin.did,
       audience: admin.did,
-      capabilities: { [spaceResource(SPACE_ID)]: 'space/admin' },
+      capabilities: { [spaceResource(SPACE_ID)]: spaceCapabilitySet().admin(false).build() },
       expiration: futureExp(),
     }, admin.sign)
 
@@ -139,7 +106,7 @@ describe('signature verification', () => {
     const token = await createUcan({
       issuer: admin.did,
       audience: admin.did,
-      capabilities: { [spaceResource(SPACE_ID)]: 'space/admin' },
+      capabilities: { [spaceResource(SPACE_ID)]: spaceCapabilitySet().admin(false).build() },
       expiration: futureExp(),
     }, admin.sign)
 
@@ -158,7 +125,7 @@ describe('signature verification', () => {
     const token = await createUcan({
       issuer: admin.did,
       audience: admin.did,
-      capabilities: { [spaceResource(SPACE_ID)]: 'space/admin' },
+      capabilities: { [spaceResource(SPACE_ID)]: spaceCapabilitySet().admin(false).build() },
       expiration: futureExp(),
     }, attacker.sign)
 
@@ -175,28 +142,31 @@ describe('delegation chain', () => {
     const member = await generateTestIdentity()
     const resource = spaceResource(SPACE_ID)
 
-    // Admin creates root UCAN (self-signed)
+    // In the orthogonal model, "admin/owner/member" are role labels only —
+    // each hop must explicitly grant a cap the child claims. Here we hand
+    // `write` down through the chain with delegatable=true on the parents.
+    // Admin creates root UCAN (self-signed) — parent, so delegatable=true.
     const rootUcan = await createUcan({
       issuer: admin.did,
       audience: admin.did,
-      capabilities: { [resource]: 'space/admin' },
+      capabilities: { [resource]: spaceCapabilitySet().write(true).build() },
       expiration: futureExp(),
     }, admin.sign)
 
-    // Admin delegates to owner
+    // Admin delegates to owner — still a parent for the member hop.
     const ownerUcan = await createUcan({
       issuer: admin.did,
       audience: owner.did,
-      capabilities: { [resource]: 'space/invite' },
+      capabilities: { [resource]: spaceCapabilitySet().write(true).build() },
       proofs: [rootUcan],
       expiration: futureExp(),
     }, admin.sign)
 
-    // Owner delegates to member
+    // Owner delegates to member — leaf.
     const memberUcan = await createUcan({
       issuer: owner.did,
       audience: member.did,
-      capabilities: { [resource]: 'space/write' },
+      capabilities: { [resource]: spaceCapabilitySet().write(false).build() },
       proofs: [ownerUcan],
       expiration: futureExp(),
     }, owner.sign)
@@ -216,19 +186,20 @@ describe('delegation chain', () => {
     const member = await generateTestIdentity()
     const resource = spaceResource(SPACE_ID)
 
-    // Admin gives member space/write
+    // Admin gives member write (delegatable so member can be a parent).
     const memberUcan = await createUcan({
       issuer: admin.did,
       audience: member.did,
-      capabilities: { [resource]: 'space/write' },
+      capabilities: { [resource]: spaceCapabilitySet().write(true).build() },
       expiration: futureExp(),
     }, admin.sign)
 
-    // Member tries to delegate space/admin (privilege escalation!)
+    // Member tries to delegate admin — parent set has no admin entry
+    // (privilege escalation!)
     const escalatedUcan = await createUcan({
       issuer: member.did,
       audience: (await generateTestIdentity()).did,
-      capabilities: { [resource]: 'space/admin' },
+      capabilities: { [resource]: spaceCapabilitySet().admin(false).build() },
       proofs: [memberUcan],
       expiration: futureExp(),
     }, member.sign)
@@ -242,11 +213,11 @@ describe('delegation chain', () => {
     const stranger = await generateTestIdentity()
     const resource = spaceResource(SPACE_ID)
 
-    // Admin delegates to owner
+    // Admin delegates write to owner (used as proof below).
     const ownerUcan = await createUcan({
       issuer: admin.did,
       audience: owner.did,
-      capabilities: { [resource]: 'space/invite' },
+      capabilities: { [resource]: spaceCapabilitySet().write(true).build() },
       expiration: futureExp(),
     }, admin.sign)
 
@@ -254,7 +225,7 @@ describe('delegation chain', () => {
     const badUcan = await createUcan({
       issuer: stranger.did,
       audience: (await generateTestIdentity()).did,
-      capabilities: { [resource]: 'space/write' },
+      capabilities: { [resource]: spaceCapabilitySet().write(false).build() },
       proofs: [ownerUcan],
       expiration: futureExp(),
     }, stranger.sign)
@@ -274,11 +245,11 @@ describe('validateUcan', () => {
     const memberUcan = await createUcan({
       issuer: admin.did,
       audience: member.did,
-      capabilities: { [resource]: 'space/write' },
+      capabilities: { [resource]: spaceCapabilitySet().write(false).build() },
       expiration: futureExp(),
     }, admin.sign)
 
-    const result = await validateUcan(memberUcan, resource, 'space/write', verify)
+    const result = await validateUcan(memberUcan, resource, 'write', verify)
     expect(result.valid).toBe(true)
   })
 
@@ -289,11 +260,11 @@ describe('validateUcan', () => {
     const token = await createUcan({
       issuer: admin.did,
       audience: admin.did,
-      capabilities: { [resource]: 'space/admin' },
+      capabilities: { [resource]: spaceCapabilitySet().admin(false).build() },
       expiration: Math.floor(Date.now() / 1000) - 100, // Expired 100 seconds ago
     }, admin.sign)
 
-    const result = await validateUcan(token, resource, 'space/admin', verify)
+    const result = await validateUcan(token, resource, 'admin', verify)
     expect(result.valid).toBe(false)
     expect(result.error).toContain('expired')
   })
@@ -303,14 +274,15 @@ describe('validateUcan', () => {
     const reader = await generateTestIdentity()
     const resource = spaceResource(SPACE_ID)
 
+    // Reader holds only `read` — orthogonal model means `write` is NOT implied.
     const readerUcan = await createUcan({
       issuer: admin.did,
       audience: reader.did,
-      capabilities: { [resource]: 'space/read' },
+      capabilities: { [resource]: spaceCapabilitySet().read(false).build() },
       expiration: futureExp(),
     }, admin.sign)
 
-    const result = await validateUcan(readerUcan, resource, 'space/write', verify)
+    const result = await validateUcan(readerUcan, resource, 'write', verify)
     expect(result.valid).toBe(false)
     expect(result.error).toContain('does not grant')
   })
@@ -323,12 +295,12 @@ describe('validateUcan', () => {
     const memberUcan = await createUcan({
       issuer: admin.did,
       audience: member.did,
-      capabilities: { [resource]: 'space/write' },
+      capabilities: { [resource]: spaceCapabilitySet().write(false).build() },
       expiration: futureExp(),
     }, admin.sign)
 
     // Member is NOT in MLS group
-    const result = await validateUcan(memberUcan, resource, 'space/write', verify, {
+    const result = await validateUcan(memberUcan, resource, 'write', verify, {
       isMlsMember: async () => false,
     })
     expect(result.valid).toBe(false)
@@ -343,11 +315,11 @@ describe('validateUcan', () => {
     const memberUcan = await createUcan({
       issuer: admin.did,
       audience: member.did,
-      capabilities: { [resource]: 'space/write' },
+      capabilities: { [resource]: spaceCapabilitySet().write(false).build() },
       expiration: futureExp(),
     }, admin.sign)
 
-    const result = await validateUcan(memberUcan, resource, 'space/write', verify, {
+    const result = await validateUcan(memberUcan, resource, 'write', verify, {
       isMlsMember: async () => true,
     })
     expect(result.valid).toBe(true)
@@ -363,11 +335,13 @@ describe('server delegation', () => {
     const serverDid = 'did:web:sync.example.com'
     const resource = spaceResource(SPACE_ID)
 
-    // Admin gives user space/write
+    // Admin gives user write. Delegatable=true because userUcan is a parent
+    // for serverUcan (server/relay special-case only needs a non-empty
+    // space set on the proof, but we keep delegatable=true by convention).
     const userUcan = await createUcan({
       issuer: admin.did,
       audience: user.did,
-      capabilities: { [resource]: 'space/write' },
+      capabilities: { [resource]: spaceCapabilitySet().write(true).build() },
       expiration: futureExp(),
     }, admin.sign)
 
@@ -391,11 +365,11 @@ describe('server delegation', () => {
     const serverDid = 'did:web:relay.example.com'
     const resource = spaceResource(SPACE_ID)
 
-    // Admin gives reader space/read only
+    // Admin gives reader read only (parent for relayUcan).
     const readerUcan = await createUcan({
       issuer: admin.did,
       audience: reader.did,
-      capabilities: { [resource]: 'space/read' },
+      capabilities: { [resource]: spaceCapabilitySet().read(true).build() },
       expiration: futureExp(),
     }, admin.sign)
 
@@ -408,7 +382,7 @@ describe('server delegation', () => {
       expiration: futureExp(),
     }, reader.sign)
 
-    // Should succeed — readers can delegate relay access
+    // Should succeed — any space cap holder can delegate relay access
     const verified = await verifyUcan(relayUcan, verify)
     expect(verified.payload.cap[resource]).toBe('server/relay')
   })
@@ -422,7 +396,7 @@ describe('server delegation', () => {
     const selfSignedRoot = await createUcan({
       issuer: attacker.did,
       audience: attacker.did,
-      capabilities: { [resource]: 'space/admin' },
+      capabilities: { [resource]: spaceCapabilitySet().admin(true).build() },
       expiration: futureExp(),
     }, attacker.sign)
 
@@ -437,7 +411,7 @@ describe('server delegation', () => {
 
     // verifyUcan succeeds (cryptographically valid) — but the root is self-signed.
     // The SERVER must check root issuer membership (not the library's job).
-    // The library validates: signature ✅, chain link (aud→iss) ✅, capability attenuation ✅
+    // The library validates: signature, chain link (aud->iss), capability attenuation.
     const verified = await verifyUcan(relayUcan, verify)
     expect(verified.payload.cap[resource]).toBe('server/relay')
 
@@ -449,11 +423,11 @@ describe('server delegation', () => {
     const admin = await generateTestIdentity()
     const serverDid = 'did:web:sync.example.com'
 
-    // Admin gives themselves space/admin
+    // Admin gives themselves admin on a space resource.
     const rootUcan = await createUcan({
       issuer: admin.did,
       audience: admin.did,
-      capabilities: { [spaceResource(SPACE_ID)]: 'space/admin' },
+      capabilities: { [spaceResource(SPACE_ID)]: spaceCapabilitySet().admin(true).build() },
       expiration: futureExp(),
     }, admin.sign)
 
