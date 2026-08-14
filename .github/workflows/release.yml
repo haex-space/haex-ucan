@@ -175,7 +175,5 @@ jobs:
               prerelease: false
             });
 
-      - name: Publish to npm
-        run: pnpm publish --access public --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish to npm (via OIDC trusted publisher)
+        run: pnpm publish --access public --no-git-checks --provenance
