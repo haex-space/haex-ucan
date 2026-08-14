@@ -2,10 +2,9 @@ export type {
   UcanHeader,
   UcanPayload,
   UcanFacts,
-  SpaceCapability,
-  ServerCapability,
-  Capability,
+  CapabilityValue,
   Capabilities,
+  ServerCapability,
   EncodedUcan,
   DecodedUcan,
   VerifiedUcan,
@@ -17,14 +16,32 @@ export type {
   ValidationResult,
 } from './types'
 
-export { DidAuthAction, SpaceCapabilities, ServerCapabilities } from './types'
+export type {
+  SpaceCap,
+  CapEntry,
+  SpaceCapabilitySet,
+  SpaceCapabilitySetBuilder,
+  DelegationError,
+  DelegationErrorKind,
+  ServerCap,
+} from './capabilities'
+
+export type { RequiredCapability } from './verify'
+
+export { DidAuthAction, SpaceCaps, ServerCapabilities } from './types'
 
 export { createUcan, decodeUcan, getSigningInput } from './token'
 export { verifyUcan, validateUcan, findRootIssuer, didToPublicKey } from './verify'
 export {
-  satisfies,
-  canDelegate,
-  capabilitiesSatisfy,
+  spaceCapabilitySet,
+  spaceCapabilitySetFromEntries,
+  holdsSpaceCap,
+  isSpaceCapDelegatable,
+  enforceDelegatable,
+  isSpaceCapValue,
+  isServerCapValue,
+  holdsServerCap,
+  SPACE_CAP_ORDER,
   parseSpaceResource,
   spaceResource,
   serverResource,
