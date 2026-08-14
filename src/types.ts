@@ -1,3 +1,5 @@
+import type { SpaceCap, SpaceCapabilitySet } from './capabilities'
+
 /**
  * UCAN Token Header (JWS)
  */
@@ -5,24 +7,6 @@ export interface UcanHeader {
   alg: 'EdDSA'
   typ: 'JWT'
 }
-
-/**
- * Space capability levels, ordered from most to least privileged.
- *
- * Attenuation rule: a capability can only delegate equal or lower levels.
- *   admin  → can delegate: admin, invite, write, read
- *   invite → can delegate: invite, write, read
- *   write  → can delegate: write, read
- *   read   → can delegate: read
- */
-export type SpaceCapability = 'space/admin' | 'space/invite' | 'space/write' | 'space/read'
-
-export const SpaceCapabilities = {
-  ADMIN: 'space/admin',
-  INVITE: 'space/invite',
-  WRITE: 'space/write',
-  READ: 'space/read',
-} as const satisfies Record<string, SpaceCapability>
 
 /**
  * Server delegation capability — allows a server to relay MLS messages
@@ -34,7 +18,27 @@ export const ServerCapabilities = {
   RELAY: 'server/relay',
 } as const satisfies Record<string, ServerCapability>
 
-export type Capability = SpaceCapability | ServerCapability
+/**
+ * Convenience constants for the orthogonal space capability tokens.
+ * Wire-form values match `SpaceCap` in `./capabilities`.
+ */
+export const SpaceCaps = {
+  READ: 'read',
+  WRITE: 'write',
+  INVITE: 'invite',
+  ADMIN: 'admin',
+} as const satisfies Record<string, SpaceCap>
+
+/**
+ * Union of possible values in a UCAN capabilities map.
+ *
+ *   - Array (SpaceCapabilitySet) for `space:*` resources
+ *   - String (ServerCapability, currently `server/relay`) for `server:*` resources
+ *
+ * Runtime discrimination via `isSpaceCapValue` / `isServerCapValue` from
+ * `./capabilities`.
+ */
+export type CapabilityValue = SpaceCapabilitySet | ServerCapability
 
 /**
  * DID-Auth action identifiers.
@@ -72,13 +76,13 @@ export enum DidAuthAction {
 }
 
 /**
- * Capabilities map: resource identifier → capability level
+ * Capabilities map: resource identifier → CapabilityValue
  *
  * Resource identifiers:
  *   - "space:<space-id>" for space capabilities
  *   - "server:<server-did>" for server delegation
  */
-export type Capabilities = Record<string, Capability>
+export type Capabilities = Record<string, CapabilityValue>
 
 /**
  * Additional facts attached to the token.

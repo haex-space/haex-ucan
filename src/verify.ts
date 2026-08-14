@@ -4,11 +4,30 @@ import type {
   VerifyFn,
   ValidationContext,
   ValidationResult,
-  Capability,
+  Capabilities,
+  ServerCapability,
 } from './types'
 import { decodeUcan, getSigningInput } from './token'
-import { capabilitiesSatisfy, parseSpaceResource } from './capabilities'
+import {
+  enforceDelegatable,
+  holdsSpaceCap,
+  isServerCapValue,
+  isSpaceCapValue,
+  parseSpaceResource,
+  type SpaceCap,
+} from './capabilities'
 import { base58btcDecode } from './multibase'
+
+/**
+ * A single required-capability ask for `validateUcan`.
+ *
+ * Discriminated by the resource key format:
+ *   - `space:*` resources take a `SpaceCap` (read / write / invite / admin)
+ *   - `server:*` resources take a `ServerCapability` (currently only `server/relay`)
+ *
+ * Runtime discrimination via `isServerCapValue` from `./capabilities`.
+ */
+export type RequiredCapability = SpaceCap | ServerCapability
 
 /** Maximum delegation chain depth to prevent abuse */
 const MAX_PROOF_DEPTH = 10
@@ -93,44 +112,67 @@ export async function verifyUcan(
  */
 function verifyDelegationChain(
   issuer: string,
-  capabilities: Record<string, Capability>,
+  capabilities: Capabilities,
   proofs: VerifiedUcan[],
 ): void {
-  for (const [resource, requiredCapability] of Object.entries(capabilities)) {
+  for (const [resource, childValue] of Object.entries(capabilities)) {
     let authorized = false
 
     for (const proof of proofs) {
       // Chain link: proof.aud must match current issuer
       if (proof.payload.aud !== issuer) continue
 
-      if (requiredCapability === 'server/relay') {
-        // server/relay can be delegated by anyone who holds any space capability
-        // on the target space. The relay inherits the delegator's permission level —
-        // it cannot do more than the delegating user could do directly.
+      // Special case: server/relay on a `space:*` resource may be delegated by
+      // any holder of at least one space capability on that same space. The
+      // relay inherits the delegator's permission level — it cannot do more
+      // than the delegating user could do directly.
+      if (isServerCapValue(childValue) && childValue === 'server/relay') {
         const spaceId = parseSpaceResource(resource)
         if (spaceId) {
-          const spaceRes = `space:${spaceId}`
-          const proofCap = proof.payload.cap[spaceRes]
-          if (proofCap && proofCap.startsWith('space/')) {
+          const proofValue = proof.payload.cap[`space:${spaceId}`]
+          if (isSpaceCapValue(proofValue) && proofValue.length > 0) {
             authorized = true
             break
           }
         }
-      } else {
-        // Attenuation: proof must grant sufficient capability for this resource
-        if (capabilitiesSatisfy(proof.payload.cap, resource, requiredCapability)) {
+      }
+
+      // General per-resource attenuation
+      const parentValue = proof.payload.cap[resource]
+      if (parentValue === undefined) continue
+
+      if (isSpaceCapValue(childValue)) {
+        if (!isSpaceCapValue(parentValue)) continue
+        const err = enforceDelegatable(parentValue, childValue)
+        if (err === null) {
           authorized = true
           break
         }
+        continue
+      }
+
+      if (isServerCapValue(childValue)) {
+        if (isServerCapValue(parentValue) && parentValue === childValue) {
+          authorized = true
+          break
+        }
+        continue
       }
     }
 
     if (!authorized) {
       throw new Error(
-        `Issuer ${issuer} is not authorized to delegate ${requiredCapability} on ${resource}`
+        `Issuer ${issuer} is not authorized to delegate ${describeCapValue(childValue)} on ${resource}`,
       )
     }
   }
+}
+
+/** Human-readable rendering of a capability value for error messages. */
+function describeCapValue(v: unknown): string {
+  if (isServerCapValue(v)) return v
+  if (isSpaceCapValue(v)) return `[${v.map(e => e.cap).join(',')}]`
+  return JSON.stringify(v)
 }
 
 /**
@@ -146,7 +188,7 @@ function verifyDelegationChain(
 export async function validateUcan(
   token: EncodedUcan,
   resource: string,
-  requiredCapability: Capability,
+  requiredCapability: RequiredCapability,
   verify: VerifyFn,
   context?: ValidationContext,
 ): Promise<ValidationResult> {
@@ -167,7 +209,16 @@ export async function validateUcan(
     }
 
     // 4. Check required capability
-    if (!capabilitiesSatisfy(verified.payload.cap, resource, requiredCapability)) {
+    const heldValue = verified.payload.cap[resource]
+    let granted = false
+    if (heldValue !== undefined) {
+      if (isServerCapValue(requiredCapability)) {
+        granted = isServerCapValue(heldValue) && heldValue === requiredCapability
+      } else {
+        granted = isSpaceCapValue(heldValue) && holdsSpaceCap(heldValue, requiredCapability)
+      }
+    }
+    if (!granted) {
       return {
         valid: false,
         error: `UCAN does not grant ${requiredCapability} on ${resource}`,
