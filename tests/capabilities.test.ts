@@ -97,3 +97,65 @@ describe('CapabilityValue discrimination', () => {
     expect(isSpaceCapValue('server/relay')).toBe(false)
   })
 })
+
+describe('SpaceCapabilitySet — regression against hierarchical world', () => {
+  it('Admin does NOT hold Read', () => {
+    // In the old hierarchical model, admin was strictly stronger than read,
+    // so satisfies(admin, read) was true. In the orthogonal model, admin
+    // only satisfies admin. This test locks that in.
+    const set = spaceCapabilitySet().admin(true).build()
+    expect(holdsSpaceCap(set, 'read')).toBe(false)
+    expect(holdsSpaceCap(set, 'admin')).toBe(true)
+  })
+
+  it('Write-only leaf does NOT satisfy Read-required floor', () => {
+    // Contract regression: consumers using holdsSpaceCap as the "does this token
+    // grant the operation?" gate must not silently authorize Read when only
+    // Write is held. In the hierarchical world, write > read implied yes;
+    // in the orthogonal world, only explicit Read grants Read.
+    const set = spaceCapabilitySet().write(true).build()
+    expect(holdsSpaceCap(set, 'read')).toBe(false)
+  })
+
+  it('non-delegatable Write parent → Write child is rejected', () => {
+    // Attenuation regression: a parent that holds Write with delegatable=false
+    // may exercise Write themselves but not delegate it. A child that claims
+    // Write from such a parent must be rejected as not_delegatable, not missing.
+    const parent = spaceCapabilitySet().write(false).build()
+    const child = spaceCapabilitySet().write(true).build()
+    expect(enforceDelegatable(parent, child)).toEqual({
+      kind: 'not_delegatable',
+      cap: 'write',
+    })
+  })
+
+  it('multi-cap root with delegatable Read+Write+Invite+Admin delegates any subset', () => {
+    // Positive coverage: a full-power delegatable root can attenuate to any
+    // combination of caps the child chooses. This is the shape of the space
+    // owner's self-signed root token.
+    const root = spaceCapabilitySet().read(true).write(true).invite(true).admin(true).build()
+    const child = spaceCapabilitySet().read(true).invite(true).build()
+    expect(enforceDelegatable(root, child)).toBeNull()
+  })
+
+  it('missing cap outranks non-delegatable in SPACE_CAP_ORDER report', () => {
+    // First-offender rule: enforceDelegatable reports the first FAILING cap
+    // in SPACE_CAP_ORDER order, not the "worst" failure kind. If Read is
+    // missing and Write is not_delegatable, the report must be Read/missing
+    // (Read comes first in SPACE_CAP_ORDER).
+    const parent = spaceCapabilitySet().write(false).build()
+    const child = spaceCapabilitySet().read(true).write(true).build()
+    expect(enforceDelegatable(parent, child)).toEqual({
+      kind: 'missing',
+      cap: 'read',
+    })
+  })
+
+  it('SPACE_CAP_ORDER is the canonical ordering (guard against reshuffle)', () => {
+    // Wire-compatibility regression: the sort order used for canonical
+    // serialization matches Rust's Cap discriminant order in
+    // haex-vault/src-tauri/src/ucan/capability_set.rs. Reshuffling this array
+    // breaks bit-exact wire compatibility with the Rust side.
+    expect(SPACE_CAP_ORDER).toEqual(['read', 'write', 'invite', 'admin'])
+  })
+})
