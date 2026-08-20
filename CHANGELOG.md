@@ -1,5 +1,120 @@
 # Changelog
 
+## 0.3.0 (2026-08-20)
+
+### New API — role presets
+
+The five-row role preset table now ships here instead of being hand-maintained
+by each consumer. It was duplicated in three places (`CapabilitySet::role_preset`
+in Rust, `capsFromSingle` in the vault frontend, and a third copy in the
+fixture-vector generator, which existed only because this library exported
+nothing to import). Two of those copies shipped the same bug — see the
+invariant below.
+
+- Type: `SpaceRole = 'reader' | 'writer' | 'inviter' | 'admin' | 'owner'`.
+- Constant: `SPACE_ROLES` — all five roles in table order.
+- Function: `spaceRolePreset(role): SpaceCapabilitySet`.
+
+| role | `read` | `write` | `invite` | `admin` |
+|---|---|---|---|---|
+| `reader` | `false` | — | — | — |
+| `writer` | `false` | `false` | — | — |
+| `inviter` | **`true`** | — | `true` | — |
+| `admin` | `true` | `true` | `true` | **`false`** |
+| `owner` | `true` | `true` | `true` | `true` |
+
+A `—` means the capability is not held at all; every other cell is that
+entry's `delegatable` bit.
+
+**The governing invariant: if a set contains `invite`, every other cap in that
+set is `delegatable: true` — except `admin`.**
+
+`enforceDelegatable` iterates `SPACE_CAP_ORDER` (`read`, `write`, `invite`,
+`admin`) and returns on the *first* offender. An inviter whose own `read` were
+`delegatable: false` therefore trips on `read` before `invite` is ever
+considered: the invite capability is **inert** and its holder can delegate
+nothing at all. That is the bug two of the three copies shipped.
+
+`admin` is the deliberate exception — holding it non-delegatably is what
+reserves minting further admins to the space root. Only the `owner` row carries
+`admin: { delegatable: true }`.
+
+The `reader` and `writer` rows deliberately keep `read` at
+`delegatable: false` and must not be "fixed" for symmetry with the rows below
+them: neither carries `invite`, so neither can reach a delegation boundary
+where the bit would be read, and least privilege is the honest default there.
+
+No union helper is exported. The presets are not nested, so a request naming
+several capabilities cannot be served by OR-ing rows — `{write, invite}` would
+yield `read(true) write(false) invite(true)`, whose holder can hand out a
+reader but not a writer. Every TypeScript caller narrows to a single cap before
+minting, so the merge case does not arise here; the Rust mirror has
+`role_preset_union` because the P2P claim-invite path does read a
+multi-capability list. A future caller needing one must re-apply the invariant
+after merging, not merely OR the bits.
+
+This table mirrors `CapabilitySet::role_preset` / `owner_root` in
+`haex-vault/src-tauri/src/ucan/capability_set.rs`; the cross-language fixture
+`haex-vault/src-tauri/tests/fixtures/ucan_chain_vectors.json` pins the two
+against each other.
+
+### POTENTIALLY BREAKING — `isSpaceCapValue` now validates entry shape
+
+`isSpaceCapValue` was `Array.isArray(v)` and nothing more, while its signature
+narrowed to `SpaceCapabilitySet`. `[{ junk: 1 }]` passed as a valid capability
+set. It now additionally requires every element to be a non-null object whose
+`cap` is in `SPACE_CAP_ORDER` and whose `delegatable` is a boolean.
+
+```ts
+isSpaceCapValue([{ junk: 1 }])                          // was true  → now false
+isSpaceCapValue([{ cap: 'read' }])                      // was true  → now false
+isSpaceCapValue([{ cap: 'superadmin', delegatable: 1 }]) // was true  → now false
+isSpaceCapValue([])                                     // true (unchanged)
+isSpaceCapValue([{ cap: 'read', delegatable: true }])    // true (unchanged)
+```
+
+Why it matters: a set with a missing `delegatable` used to reach
+`holdsSpaceCap`, which answered `true` on presence alone. That failed closed in
+practice (an `undefined` delegation bit is falsy), but consumers are starting to
+persist and round-trip these sets, so the shape is now checked at the boundary.
+
+Behaviour change to expect if you feed it malformed input: such a value is now
+rejected *upstream* rather than being carried into `holdsSpaceCap` /
+`enforceDelegatable`. Inside this library that tightens two paths in
+`verifyDelegationChain` — the `server/relay` piggyback check
+(`isSpaceCapValue(proofValue) && proofValue.length > 0`) and the general
+per-resource attenuation branch. A child capability array carrying an unknown
+cap now matches neither the space nor the server branch, so the chain walker
+throws "not authorized to delegate" instead of silently accepting it: previously
+`enforceDelegatable` never examined caps outside `SPACE_CAP_ORDER` and returned
+`null` for such a child.
+
+The guard validates entry *shape*, not the canonical-form invariants of
+`SpaceCapabilitySet` (sorted, no duplicates). Route untrusted input through
+`spaceCapabilitySetFromEntries` if you need those enforced too.
+
+#### Consumer impact (audited before release)
+
+All six `isSpaceCapValue` call sites in `haex-vault` (4) and `haex-sync-server`
+(2) were reviewed — the scope here is the function whose behaviour changed, not
+its sibling validators `holdsSpaceCap`/`enforceDelegatable`, whose semantics are
+unchanged. None of the audited sites relies on the loose behaviour — every one
+either hard-rejects or fails closed on `false`, and every producer in both repos
+already emits `{cap, delegatable}` through the builder. Three things to know
+when bumping the dependency:
+
+- Both repos pin `0.2.x` (`^0.2.0` does not cross a 0.x minor), so nothing picks
+  this up until its manifest is bumped explicitly.
+- `haex-vault`'s Rust `CapEntry` has `#[serde(default)]` on `delegatable`, so the
+  Rust verifier accepts `[{"cap":"read"}]` where this check now rejects it. Worth
+  closing in the same release if bit-for-bit parity matters, along with a negative
+  fixture vector for that shape.
+- `haex-vault/src/stores/sync/orchestrator/pull/apply.ts:95` (`rowHoldsCap`) casts
+  a persisted `haex_ucan_tokens` row straight to `SpaceCapabilitySet` and calls
+  `holdsSpaceCap` without the guard, so a divergent-peer row with a missing
+  `delegatable` would still grant on presence alone. Route through
+  `isSpaceCapValue` when the dependency is bumped.
+
 ## 0.2.0 (2026-08-14)
 
 ### BREAKING CHANGES
