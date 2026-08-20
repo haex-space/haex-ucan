@@ -95,10 +95,13 @@ The guard validates entry *shape*, not the canonical-form invariants of
 
 #### Consumer impact (audited before release)
 
-All six call sites in `haex-vault` and `haex-sync-server` were reviewed. None
-relies on the loose behaviour — every one either hard-rejects or fails closed on
-`false`, and every producer in both repos already emits `{cap, delegatable}`
-through the builder. Two things to know when bumping the dependency:
+All six `isSpaceCapValue` call sites in `haex-vault` (4) and `haex-sync-server`
+(2) were reviewed — the scope here is the function whose behaviour changed, not
+its sibling validators `holdsSpaceCap`/`enforceDelegatable`, whose semantics are
+unchanged. None of the audited sites relies on the loose behaviour — every one
+either hard-rejects or fails closed on `false`, and every producer in both repos
+already emits `{cap, delegatable}` through the builder. Three things to know
+when bumping the dependency:
 
 - Both repos pin `0.2.x` (`^0.2.0` does not cross a 0.x minor), so nothing picks
   this up until its manifest is bumped explicitly.
@@ -106,6 +109,11 @@ through the builder. Two things to know when bumping the dependency:
   Rust verifier accepts `[{"cap":"read"}]` where this check now rejects it. Worth
   closing in the same release if bit-for-bit parity matters, along with a negative
   fixture vector for that shape.
+- `haex-vault/src/stores/sync/orchestrator/pull/apply.ts:95` (`rowHoldsCap`) casts
+  a persisted `haex_ucan_tokens` row straight to `SpaceCapabilitySet` and calls
+  `holdsSpaceCap` without the guard, so a divergent-peer row with a missing
+  `delegatable` would still grant on presence alone. Route through
+  `isSpaceCapValue` when the dependency is bumped.
 
 ## 0.2.0 (2026-08-14)
 
