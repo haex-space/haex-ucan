@@ -112,6 +112,127 @@ export function spaceCapabilitySet(): SpaceCapabilitySetBuilder {
 }
 
 /**
+ * Member roles in the preset table below.
+ *
+ * A role is not a capability and carries no rank — it is a *name for one
+ * row* of {@link spaceRolePreset}. There is no implication between roles
+ * any more than there is between caps.
+ */
+export type SpaceRole = 'reader' | 'writer' | 'inviter' | 'admin' | 'owner'
+
+/**
+ * All roles, in the order of the {@link spaceRolePreset} table
+ * (least to most privileged). Presentational only — nothing derives
+ * authorization from this ordering.
+ */
+export const SPACE_ROLES: readonly SpaceRole[] = [
+  'reader',
+  'writer',
+  'inviter',
+  'admin',
+  'owner',
+] as const
+
+/**
+ * The capability set for a member role — the exact set every delegation
+ * path hands out.
+ *
+ * | role      | `read`     | `write` | `invite` | `admin`     |
+ * |-----------|------------|---------|----------|-------------|
+ * | `reader`  | `false`    | —       | —        | —           |
+ * | `writer`  | `false`    | `false` | —        | —           |
+ * | `inviter` | **`true`** | —       | `true`   | —           |
+ * | `admin`   | `true`     | `true`  | `true`   | **`false`** |
+ * | `owner`   | `true`     | `true`  | `true`   | `true`      |
+ *
+ * A `—` means the capability is not held at all; every other cell is that
+ * entry's `delegatable` bit.
+ *
+ * ## Invariant
+ *
+ * **If a set contains `invite`, every other cap in that set is
+ * `delegatable: true` — except `admin`.**
+ *
+ * {@link enforceDelegatable} iterates {@link SPACE_CAP_ORDER} and returns
+ * on the *first* offender. An inviter whose own `read` were
+ * `delegatable: false` would therefore trip on `read` before `invite` is
+ * ever considered: the invite capability would be **inert** and its holder
+ * could delegate nothing at all. This exact bug shipped in all three
+ * hand-maintained copies of this table and was found in review.
+ *
+ * `admin` is the deliberate exception. Holding it non-delegatably is what
+ * reserves minting further admins to the space root — a delegated admin may
+ * hand out reader/writer/inviter presets but can never create another
+ * admin. Only the `owner` row carries `admin: { delegatable: true }`.
+ *
+ * The `reader` and `writer` rows deliberately keep `read` at
+ * `delegatable: false`, and must NOT be "fixed" to `true` for symmetry with
+ * the rows below them: neither preset carries `invite`, so neither can ever
+ * reach a delegation boundary where the bit would be read, and least
+ * privilege is the honest default there.
+ *
+ * "An admin has all rights" lives here — the `admin` role expands to all
+ * four caps at mint time — and never in {@link holdsSpaceCap}, which stays
+ * exact-match.
+ *
+ * ## Builder footgun
+ *
+ * The {@link SpaceCapabilitySetBuilder} boolean is `delegatable`, and
+ * calling a method at all *grants* the cap. Withholding a cap means
+ * omitting the call, not passing `false`:
+ * `spaceCapabilitySet().write(false).build()` yields
+ * `[{ cap: 'write', delegatable: false }]`, for which
+ * `holdsSpaceCap(set, 'write')` is `true`.
+ *
+ * ## Mirror
+ *
+ * Mirrored in Rust as `CapabilitySet::role_preset` / `owner_root` in
+ * `haex-vault/src-tauri/src/ucan/capability_set.rs` (keyed on `Cap`, with
+ * the `owner` row split out into `owner_root`). The two tables MUST stay
+ * identical: a token minted on one side is attenuation-checked on the
+ * other, and the cross-language fixture
+ * `haex-vault/src-tauri/tests/fixtures/ucan_chain_vectors.json` pins them
+ * against each other.
+ *
+ * ## Multi-capability requests
+ *
+ * The presets are not nested — an `inviter` has no `write`, a `writer` has
+ * no `invite` — so a request naming several capabilities cannot be served
+ * by OR-ing the bits of several rows. `{ write, invite }` would yield
+ * `read(true) write(false) invite(true)`, whose holder can hand out a
+ * reader but not a writer: the invariant above has to be re-applied after
+ * any merge. No TypeScript caller mints from a multi-capability list today
+ * (they all narrow to one cap first), so this library exports no union
+ * helper; the Rust mirror has `role_preset_union` because the P2P
+ * claim-invite path does read such a list. A future caller that needs one
+ * here must re-apply the invariant, not merely OR the bits.
+ */
+export function spaceRolePreset(role: SpaceRole): SpaceCapabilitySet {
+  switch (role) {
+    case 'reader':
+      return spaceCapabilitySet().read(false).build()
+    case 'writer':
+      return spaceCapabilitySet().read(false).write(false).build()
+    case 'inviter':
+      return spaceCapabilitySet().read(true).invite(true).build()
+    case 'admin':
+      return spaceCapabilitySet()
+        .read(true)
+        .write(true)
+        .invite(true)
+        .admin(false)
+        .build()
+    case 'owner':
+      return spaceCapabilitySet()
+        .read(true)
+        .write(true)
+        .invite(true)
+        .admin(true)
+        .build()
+  }
+}
+
+/**
  * True iff `set` contains an entry for `cap`.
  *
  * Note: the model is orthogonal — holding `admin` does NOT imply
@@ -155,13 +276,25 @@ export function enforceDelegatable(
 }
 
 /**
- * Runtime discriminator: a SpaceCap value is an array (of CapEntry).
+ * Runtime discriminator: a SpaceCap value is an array of well-formed
+ * {@link CapEntry} objects — every element has a `cap` in
+ * {@link SPACE_CAP_ORDER} and a boolean `delegatable`.
  *
- * Task 3 will refine the return type to the concrete CapabilityValue
- * union; the runtime check stays identical.
+ * This is the wire/storage boundary guard. It validates entry *shape*, not
+ * the canonical-form invariants of {@link SpaceCapabilitySet} (sorted, no
+ * duplicates) — route untrusted input through
+ * {@link spaceCapabilitySetFromEntries} if you need those too.
+ *
+ * An empty array is a valid (empty) set: it holds no cap, so every
+ * {@link holdsSpaceCap} query fails closed.
  */
 export function isSpaceCapValue(v: unknown): v is SpaceCapabilitySet {
-  return Array.isArray(v)
+  return Array.isArray(v) && v.every(
+    e => e !== null
+      && typeof e === 'object'
+      && SPACE_CAP_ORDER.includes((e as CapEntry).cap)
+      && typeof (e as CapEntry).delegatable === 'boolean',
+  )
 }
 
 /**

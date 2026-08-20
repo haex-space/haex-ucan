@@ -21,6 +21,7 @@ export type {
   CapEntry,
   SpaceCapabilitySet,
   SpaceCapabilitySetBuilder,
+  SpaceRole,
   DelegationError,
   DelegationErrorKind,
   ServerCap,
@@ -35,6 +36,8 @@ export { verifyUcan, validateUcan, findRootIssuer, didToPublicKey } from './veri
 export {
   spaceCapabilitySet,
   spaceCapabilitySetFromEntries,
+  spaceRolePreset,
+  SPACE_ROLES,
   holdsSpaceCap,
   isSpaceCapDelegatable,
   enforceDelegatable,
