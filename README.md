@@ -154,6 +154,37 @@ duplicates, no `delegatable: undefined`.
   `SpaceCapabilitySet`.
 - `spaceCapabilitySetFromEntries(entries)` — build from raw
   `CapEntry[]`. Deduplicates and canonicalises order.
+- `spaceRolePreset(role)` — the preset set for a `SpaceRole` (see
+  [Role presets](#role-presets)). Prefer this over hand-rolling a builder chain
+  at a delegation site.
+
+### Role presets
+
+`spaceRolePreset(role)` returns the exact set every delegation path hands out.
+`SPACE_ROLES` lists all five roles in table order.
+
+| role | `read` | `write` | `invite` | `admin` |
+|---|---|---|---|---|
+| `reader` | `false` | — | — | — |
+| `writer` | `false` | `false` | — | — |
+| `inviter` | **`true`** | — | `true` | — |
+| `admin` | `true` | `true` | `true` | **`false`** |
+| `owner` | `true` | `true` | `true` | `true` |
+
+A `—` means the capability is not held at all; every other cell is that entry's
+`delegatable` bit.
+
+**Invariant: if a set contains `invite`, every other cap in that set is
+`delegatable: true` — except `admin`.** `enforceDelegatable` returns on the
+first offender in `SPACE_CAP_ORDER`, so an inviter holding a non-delegatable
+`read` would trip on `read` and be able to delegate nothing at all. `admin`
+stays non-delegatable so only the `owner` row can mint further admins.
+`reader` and `writer` keep `read(false)` on purpose — neither holds `invite`,
+so neither reaches a delegation boundary.
+
+Note the builder's boolean is `delegatable`, and calling a method at all
+*grants* the cap. To withhold a cap, omit the call — `.write(false)` grants a
+non-delegatable `write`, it does not withhold `write`.
 
 ### Query
 
@@ -170,7 +201,10 @@ duplicates, no `delegatable: undefined`.
 
 ### Discriminators (runtime type guards)
 
-- `isSpaceCapValue(v)` — `v is SpaceCapabilitySet`.
+- `isSpaceCapValue(v)` — `v is SpaceCapabilitySet`. An array in which every
+  element has a `cap` from `SPACE_CAP_ORDER` and a boolean `delegatable`.
+  Validates entry shape only, not the sorted/duplicate-free invariant — use
+  `spaceCapabilitySetFromEntries` for that.
 - `isServerCapValue(v)` — `v is ServerCapability`.
 
 ### Resource-string helpers
@@ -183,6 +217,7 @@ duplicates, no `delegatable: undefined`.
 
 - `SpaceCaps` — `{ READ, WRITE, INVITE, ADMIN }`, values are the bare cap
   names (`'read' | 'write' | 'invite' | 'admin'`).
+- `SPACE_ROLES` — the five `SpaceRole` names in preset-table order.
 - `ServerCapabilities` — `{ RELAY: 'server/relay' }`.
 - `SPACE_CAP_ORDER` — canonical wire order for entries; do not reshuffle.
 - `DidAuthAction` — DID-auth action enum.
@@ -204,4 +239,5 @@ pnpm build       # tsup → dist/
 ## Versioning
 
 This package follows semver. See [CHANGELOG.md](./CHANGELOG.md) for the
-`0.1.x → 0.2.0` migration guide.
+`0.1.x → 0.2.0` migration guide and the `0.3.0` notes on role presets and the
+tightened `isSpaceCapValue`.
