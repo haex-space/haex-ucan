@@ -59,3 +59,5 @@ export {
   publicKeyToDid,
   didToRawPublicKey,
 } from './multibase'
+
+export * from './auth'
