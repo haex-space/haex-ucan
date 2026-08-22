@@ -86,7 +86,7 @@ describe('UCAN-PoP shared primitives (§A.3)', () => {
 
   it('3. jti replay within window is rejected', async () => {
     const id = await generateIdentity()
-    const jtiCache = createJtiTtlCache({ ttlMs: 60_000, sweepIntervalMs: 60_000 })
+    const jtiCache = createJtiTtlCache({ sweepIntervalMs: 60_000 })
     try {
       const header = await createSignedAuthHeader({
         privateKey: id.privateKey,
@@ -288,5 +288,96 @@ describe('UCAN-PoP shared primitives (§A.3)', () => {
     })
 
     expect(result).toEqual({ ok: false, reason: POP_ERROR_MESSAGES.FUTURE_TIMESTAMP })
+  })
+
+  it('11. future-dated proof (within skew) cannot replay before its own exp', async () => {
+    // Regression: previously the jti cache used a cache-wide TTL keyed off
+    // `insertedAt`. A proof timestamped `+skew` in the future has
+    // `exp = timestamp + ttl = server_now + ttl + skew`, so it stayed valid
+    // for `ttl + skew` from server-clock — but the jti entry evicted after
+    // just `ttl` from insertion, opening a `skew`-wide replay window. The
+    // cache's `has()` uses wall-clock `Date.now()` for lazy eviction, so the
+    // test anchors simulated verifier timestamps to `Date.now()` — the entry
+    // must still be alive relative to real time when the replay is attempted.
+    const id = await generateIdentity()
+    const jtiCache = createJtiTtlCache({ sweepIntervalMs: 3_600_000 })
+    try {
+      const t0 = Date.now()
+      const clockSkewMs = 30_000
+      const clientNow = t0 + clockSkewMs // signed at max future drift
+      const ttlMs = 60_000
+
+      const header = await createSignedAuthHeader({
+        privateKey: id.privateKey,
+        did: id.did,
+        method: METHOD,
+        path: PATH,
+        rawQuery: RAW_QUERY,
+        body: BODY,
+        now: clientNow,
+        ttlMs,
+      })
+
+      const first = await verifySignedAuthHeader({
+        headerValue: header,
+        expectedDid: id.did,
+        method: METHOD,
+        path: PATH,
+        rawQuery: RAW_QUERY,
+        body: BODY,
+        now: t0,
+        seenJtis: jtiCache,
+        clockSkewMs,
+        maxLifetimeMs: ttlMs + clockSkewMs,
+      })
+      expect(first.ok).toBe(true)
+
+      // Simulated server-clock advances past a naive `insertedAt + cacheTtl`
+      // window (t0 + 60_000) but the accepted proof's `exp` is clientNow +
+      // ttl = t0 + 90_000. Replay must still be rejected. Wall clock during
+      // this test only advances a few ms, so the cache's `has()` eviction
+      // guard (against real Date.now()) still finds the entry.
+      const replayAt = t0 + 70_000
+      const replay = await verifySignedAuthHeader({
+        headerValue: header,
+        expectedDid: id.did,
+        method: METHOD,
+        path: PATH,
+        rawQuery: RAW_QUERY,
+        body: BODY,
+        now: replayAt,
+        seenJtis: jtiCache,
+        clockSkewMs,
+        maxLifetimeMs: ttlMs + clockSkewMs,
+      })
+      expect(replay).toEqual({ ok: false, reason: POP_ERROR_MESSAGES.REPLAY })
+    }
+    finally {
+      jtiCache.destroy()
+    }
+  })
+
+  it('12. overlong declared lifetime is rejected', async () => {
+    const id = await generateIdentity()
+    const header = await createSignedAuthHeader({
+      privateKey: id.privateKey,
+      did: id.did,
+      method: METHOD,
+      path: PATH,
+      rawQuery: RAW_QUERY,
+      body: BODY,
+      ttlMs: 10 * 60_000, // 10 minutes — way over default 60s cap
+    })
+
+    const result = await verifySignedAuthHeader({
+      headerValue: header,
+      expectedDid: id.did,
+      method: METHOD,
+      path: PATH,
+      rawQuery: RAW_QUERY,
+      body: BODY,
+    })
+
+    expect(result).toEqual({ ok: false, reason: POP_ERROR_MESSAGES.LIFETIME_EXCEEDED })
   })
 })

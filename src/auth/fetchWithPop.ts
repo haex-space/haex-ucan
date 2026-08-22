@@ -34,7 +34,7 @@ export async function fetchWithUcanPop(
   const method = (options.method ?? 'GET').toUpperCase()
   const body = normaliseBody(options.body)
 
-  const parsed = new URL(url)
+  const parsed = new URL(url, globalThis.location?.href)
   const path = parsed.pathname
   const rawQuery = parsed.search.startsWith('?') ? parsed.search.slice(1) : parsed.search
 

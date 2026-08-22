@@ -15,6 +15,16 @@ export const DEFAULT_POP_TTL_MS = 60_000
  */
 export const DEFAULT_POP_CLOCK_SKEW_MS = 5_000
 
+/**
+ * Server-side cap on `payload.exp - payload.timestamp`. Prevents a caller from
+ * declaring an arbitrarily long lifetime — which would (a) let a captured proof
+ * remain replay-eligible far beyond the intended window and (b) pin the jti in
+ * the replay cache for equally long, opening a memory-DoS via unique jtis.
+ * Defaults to `DEFAULT_POP_TTL_MS` so a caller that opts into a longer client
+ * TTL must be met by a server that also opts in.
+ */
+export const DEFAULT_MAX_POP_LIFETIME_MS = DEFAULT_POP_TTL_MS
+
 export interface CreateSignedAuthHeaderOptions {
   /** Ed25519 private key belonging to `did`. */
   privateKey: CryptoKey
@@ -79,6 +89,8 @@ export interface VerifySignedAuthHeaderOptions {
   seenJtis?: JtiCache
   /** Tolerance for future-clock drift. Defaults to `DEFAULT_POP_CLOCK_SKEW_MS`. */
   clockSkewMs?: number
+  /** Max accepted `payload.exp - payload.timestamp`. Defaults to `DEFAULT_MAX_POP_LIFETIME_MS`. */
+  maxLifetimeMs?: number
 }
 
 /**
@@ -92,16 +104,20 @@ export interface VerifySignedAuthHeaderOptions {
  *  1. structural / base64 parse
  *  2. `payload.did === expectedDid`  (audience)
  *  3. `payload.timestamp <= now + skew` (future drift)
- *  4. `now <= payload.exp`  (expiration)
- *  5. `payload.requestHash === computeRequestHash(...)`
- *  6. Ed25519 signature verify against `didToRawPublicKey(expectedDid)`
- *  7. `!seenJtis.has(jti)`; then `seenJtis.add(jti)`
+ *  4. `payload.exp - payload.timestamp <= maxLifetimeMs` (declared lifetime cap)
+ *  5. `now <= payload.exp`  (expiration)
+ *  6. `payload.requestHash === computeRequestHash(...)`
+ *  7. Ed25519 signature verify against `didToRawPublicKey(expectedDid)`
+ *  8. `!seenJtis.has(jti)`; then `seenJtis.add(jti, payload.exp)` — retention
+ *     matches the accepted proof's exp so the entry cannot evict before the
+ *     window closes.
  */
 export async function verifySignedAuthHeader(
   opts: VerifySignedAuthHeaderOptions,
 ): Promise<PopVerifyResult> {
   const now = opts.now ?? Date.now()
   const skew = opts.clockSkewMs ?? DEFAULT_POP_CLOCK_SKEW_MS
+  const maxLifetimeMs = opts.maxLifetimeMs ?? DEFAULT_MAX_POP_LIFETIME_MS
 
   const parts = opts.headerValue.split('.')
   if (parts.length !== 2 || !parts[0] || !parts[1]) {
@@ -128,6 +144,9 @@ export async function verifySignedAuthHeader(
   }
   if (payload.timestamp > now + skew) {
     return { ok: false, reason: POP_ERROR_MESSAGES.FUTURE_TIMESTAMP }
+  }
+  if (payload.exp - payload.timestamp > maxLifetimeMs) {
+    return { ok: false, reason: POP_ERROR_MESSAGES.LIFETIME_EXCEEDED }
   }
   if (now > payload.exp) {
     return { ok: false, reason: POP_ERROR_MESSAGES.EXPIRED }
@@ -174,7 +193,7 @@ export async function verifySignedAuthHeader(
     if (opts.seenJtis.has(payload.jti)) {
       return { ok: false, reason: POP_ERROR_MESSAGES.REPLAY }
     }
-    opts.seenJtis.add(payload.jti)
+    opts.seenJtis.add(payload.jti, payload.exp)
   }
 
   return { ok: true, payload }

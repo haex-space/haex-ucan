@@ -57,6 +57,7 @@ export interface VerifyUcanPopOptions {
   now?: number
   seenJtis?: JtiCache
   clockSkewMs?: number
+  maxLifetimeMs?: number
 }
 
 /**
@@ -74,5 +75,6 @@ export function verifyUcanPop(opts: VerifyUcanPopOptions): Promise<PopVerifyResu
     now: opts.now,
     seenJtis: opts.seenJtis,
     clockSkewMs: opts.clockSkewMs,
+    maxLifetimeMs: opts.maxLifetimeMs,
   })
 }

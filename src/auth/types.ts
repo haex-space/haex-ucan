@@ -32,6 +32,7 @@ export const POP_ERROR_MESSAGES = {
   MALFORMED: 'PoP malformed',
   EXPIRED: 'Expired PoP',
   FUTURE_TIMESTAMP: 'PoP timestamp is in the future',
+  LIFETIME_EXCEEDED: 'PoP lifetime exceeds server maximum',
   REPLAY: 'PoP replay detected',
   AUDIENCE_MISMATCH: 'PoP does not match UCAN audience',
   SIGNATURE_INVALID: 'PoP signature invalid',
