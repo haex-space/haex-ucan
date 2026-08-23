@@ -2,7 +2,7 @@ import { base64urlDecode, base64urlEncode } from '../encoding'
 import { didToRawPublicKey } from '../multibase'
 import { computeRequestHash } from './requestHash'
 import type { JtiCache } from './jtiCache'
-import type { PopPayload, PopVerifyResult } from './types'
+import type { PopPayload, PopVerifyResult, SignedAuthAdditionalPayload } from './types'
 import { POP_ERROR_MESSAGES } from './types'
 
 /** Default PoP validity window. Matches DID-Auth (60 s). */
@@ -44,6 +44,11 @@ export interface CreateSignedAuthHeaderOptions {
   jti?: string
   /** Explicit validity window in ms. Defaults to `DEFAULT_POP_TTL_MS`. */
   ttlMs?: number
+  /**
+   * Protocol-specific claims, signed together with the common PoP payload.
+   * Reserved PoP field names are rejected.
+   */
+  additionalPayload?: SignedAuthAdditionalPayload
 }
 
 /**
@@ -55,12 +60,13 @@ export async function createSignedAuthHeader(opts: CreateSignedAuthHeaderOptions
   const ttlMs = opts.ttlMs ?? DEFAULT_POP_TTL_MS
   const requestHash = await computeRequestHash(opts.method, opts.path, opts.rawQuery, opts.body)
 
-  const payload: PopPayload = {
+  const payload: PopPayload & SignedAuthAdditionalPayload = {
     did: opts.did,
     timestamp: now,
     exp: now + ttlMs,
     jti: opts.jti ?? crypto.randomUUID(),
     requestHash,
+    ...validatedAdditionalPayload(opts.additionalPayload),
   }
 
   const payloadBytes = new TextEncoder().encode(JSON.stringify(payload))
@@ -94,6 +100,16 @@ export interface VerifySignedAuthHeaderOptions {
 }
 
 /**
+ * Verify a signed auth header using a caller-resolved raw Ed25519 public key.
+ * This is for DID methods such as `did:web`, whose key material cannot be
+ * derived locally like a `did:key` public key can.
+ */
+export interface VerifySignedAuthHeaderWithKeyOptions extends VerifySignedAuthHeaderOptions {
+  /** Raw 32-byte Ed25519 public key belonging to `expectedDid`. */
+  publicKey: Uint8Array
+}
+
+/**
  * Verify a signed auth header. Returns a discriminated union so callers can
  * surface pinnable failure reasons without stringly-typed comparisons.
  *
@@ -114,6 +130,24 @@ export interface VerifySignedAuthHeaderOptions {
  */
 export async function verifySignedAuthHeader(
   opts: VerifySignedAuthHeaderOptions,
+): Promise<PopVerifyResult> {
+  let publicKey: Uint8Array
+  try {
+    publicKey = didToRawPublicKey(opts.expectedDid)
+  }
+  catch {
+    return { ok: false, reason: POP_ERROR_MESSAGES.SIGNATURE_INVALID }
+  }
+
+  return verifySignedAuthHeaderWithKey({ ...opts, publicKey })
+}
+
+/**
+ * See `verifySignedAuthHeader`. This variant receives an already resolved raw
+ * Ed25519 public key and otherwise applies exactly the same PoP checks.
+ */
+export async function verifySignedAuthHeaderWithKey(
+  opts: VerifySignedAuthHeaderWithKeyOptions,
 ): Promise<PopVerifyResult> {
   const now = opts.now ?? Date.now()
   const skew = opts.clockSkewMs ?? DEFAULT_POP_CLOCK_SKEW_MS
@@ -167,10 +201,9 @@ export async function verifySignedAuthHeader(
 
   let signatureValid = false
   try {
-    const publicKeyBytes = didToRawPublicKey(opts.expectedDid)
     const key = await crypto.subtle.importKey(
       'raw',
-      publicKeyBytes as Uint8Array<ArrayBuffer>,
+      opts.publicKey as Uint8Array<ArrayBuffer>,
       { name: 'Ed25519' },
       false,
       ['verify'],
@@ -197,6 +230,39 @@ export async function verifySignedAuthHeader(
   }
 
   return { ok: true, payload }
+}
+
+/**
+ * Read an unverified signed-auth payload for routing or key resolution.
+ * Callers MUST verify the complete header before trusting any returned field.
+ */
+export function parseSignedAuthHeaderPayload(headerValue: string): Record<string, unknown> | null {
+  const parts = headerValue.split('.')
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return null
+
+  try {
+    const decoded: unknown = JSON.parse(new TextDecoder().decode(base64urlDecode(parts[0])))
+    return typeof decoded === 'object' && decoded !== null && !Array.isArray(decoded)
+      ? decoded as Record<string, unknown>
+      : null
+  }
+  catch {
+    return null
+  }
+}
+
+function validatedAdditionalPayload(
+  additionalPayload: SignedAuthAdditionalPayload | undefined,
+): SignedAuthAdditionalPayload {
+  if (!additionalPayload) return {}
+
+  const reserved = new Set<string>(['did', 'timestamp', 'exp', 'jti', 'requestHash'])
+  for (const [key, value] of Object.entries(additionalPayload)) {
+    if (reserved.has(key) || typeof value !== 'string') {
+      throw new TypeError(`Invalid signed auth additional payload field: ${key}`)
+    }
+  }
+  return additionalPayload
 }
 
 function isPopPayload(value: unknown): value is PopPayload {
