@@ -2,6 +2,7 @@ export type {
   PopPayload,
   PopVerifyResult,
   PopErrorMessage,
+  SignedAuthAdditionalPayload,
 } from './types'
 export {
   POP_HEADER_NAME,
@@ -15,10 +16,13 @@ export {
   DEFAULT_POP_CLOCK_SKEW_MS,
   createSignedAuthHeader,
   verifySignedAuthHeader,
+  verifySignedAuthHeaderWithKey,
+  parseSignedAuthHeaderPayload,
 } from './signedAuthHeader'
 export type {
   CreateSignedAuthHeaderOptions,
   VerifySignedAuthHeaderOptions,
+  VerifySignedAuthHeaderWithKeyOptions,
 } from './signedAuthHeader'
 
 export {

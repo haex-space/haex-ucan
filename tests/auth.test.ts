@@ -5,13 +5,16 @@ import {
   createJtiTtlCache,
   createSignedAuthHeader,
   DEFAULT_POP_TTL_MS,
+  parseSignedAuthHeaderPayload,
   POP_ERROR_MESSAGES,
   verifySignedAuthHeader,
+  verifySignedAuthHeaderWithKey,
 } from '../src'
 
 interface TestIdentity {
   did: string
   privateKey: CryptoKey
+  publicKey: Uint8Array
 }
 
 async function generateIdentity(): Promise<TestIdentity> {
@@ -22,7 +25,7 @@ async function generateIdentity(): Promise<TestIdentity> {
   multicodec[1] = 0x01
   multicodec.set(rawPub, 2)
   const did = `did:key:z${base58btcEncode(multicodec)}`
-  return { did, privateKey: kp.privateKey }
+  return { did, privateKey: kp.privateKey, publicKey: rawPub }
 }
 
 const METHOD = 'POST'
@@ -57,6 +60,42 @@ describe('UCAN-PoP shared primitives (§A.3)', () => {
       expect(result.payload.requestHash).toBe(await computeRequestHash(METHOD, PATH, RAW_QUERY, BODY))
       expect(result.payload.exp - result.payload.timestamp).toBe(DEFAULT_POP_TTL_MS)
     }
+  })
+
+  it('signs protocol claims without allowing PoP-field overrides', async () => {
+    const id = await generateIdentity()
+    const header = await createSignedAuthHeader({
+      privateKey: id.privateKey,
+      did: id.did,
+      method: METHOD,
+      path: PATH,
+      rawQuery: RAW_QUERY,
+      body: BODY,
+      additionalPayload: { spaceId: 'space-1' },
+    })
+
+    expect(parseSignedAuthHeaderPayload(header)).toMatchObject({ did: id.did, spaceId: 'space-1' })
+
+    const result = await verifySignedAuthHeaderWithKey({
+      headerValue: header,
+      expectedDid: id.did,
+      publicKey: id.publicKey,
+      method: METHOD,
+      path: PATH,
+      rawQuery: RAW_QUERY,
+      body: BODY,
+    })
+    expect(result.ok).toBe(true)
+
+    await expect(createSignedAuthHeader({
+      privateKey: id.privateKey,
+      did: id.did,
+      method: METHOD,
+      path: PATH,
+      rawQuery: RAW_QUERY,
+      body: BODY,
+      additionalPayload: { did: 'did:key:zoverride' },
+    })).rejects.toThrow('Invalid signed auth additional payload field: did')
   })
 
   it('2. expired (now > exp) is rejected', async () => {

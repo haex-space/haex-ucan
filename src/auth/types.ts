@@ -48,3 +48,11 @@ export type PopErrorMessage = (typeof POP_ERROR_MESSAGES)[keyof typeof POP_ERROR
 export type PopVerifyResult =
   | { ok: true; payload: PopPayload }
   | { ok: false; reason: PopErrorMessage }
+
+/**
+ * JSON claims carried alongside the common proof-of-possession fields.
+ *
+ * Protocol-specific wrappers may add claims, but cannot replace any of the
+ * PoP fields. The complete object is covered by the Ed25519 signature.
+ */
+export type SignedAuthAdditionalPayload = Readonly<Record<string, unknown>>
