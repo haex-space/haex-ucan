@@ -86,6 +86,16 @@ describe('UCAN-PoP shared primitives (§A.3)', () => {
       body: BODY,
     })
     expect(result.ok).toBe(true)
+
+    await expect(createSignedAuthHeader({
+      privateKey: id.privateKey,
+      did: id.did,
+      method: METHOD,
+      path: PATH,
+      rawQuery: RAW_QUERY,
+      body: BODY,
+      additionalPayload: { did: 'did:key:zoverride' },
+    })).rejects.toThrow('Invalid signed auth additional payload field: did')
   })
 
   it('2. expired (now > exp) is rejected', async () => {
